@@ -1,0 +1,41 @@
+version: '3.7'
+services:
+    postgres:
+        image: postgres:9.6
+        environment:
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+        ports:
+            - "5432:5432"
+        logging:
+            options:
+                max-size: 10m
+                max-file: "3"
+
+    webserver:
+        image: apache/airflow:1.10.11
+        restart: always
+        depends_on:
+            - postgres
+        environment:
+            - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql://airflow:airflow@postgres/airflow
+            - AIRFLOW_CORE_EXECUTOR=LocalExecutor
+            - AIRFLOW__CORE__LOAD_EXAMPLES=True
+            - AIRFLOW__CORE__STORE_DAG_CODE=True
+            - AIRFLOW__CORE__STORE_SERIALIZED_DAGS=True
+        logging:
+            options:
+                max-size: 10m
+                max-file: "3"
+        volumes:
+            - ./dags:/opt/airflow/dags
+        ports:
+            - "8080:8080"
+        command: -c "airflow initdb && (airflow scheduler &) && airflow webserver"
+        entrypoint: /bin/bash
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
