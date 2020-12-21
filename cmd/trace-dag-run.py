@@ -2,40 +2,34 @@ import argparse
 import collections
 import datetime
 import queue
+from opentelemetry import trace
+from opentelemetry.exporter import jaeger
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchExportSpanProcessor
 
 from airflow.models import serialized_dag
 
+trace.set_tracer_provider(TracerProvider())
 
-class Node:
-    def __init__(self, task_id, task_type):
-        self.task_id = task_id
-        self.task_type = task_type
+jaeger_exporter = jaeger.JaegerSpanExporter(
+    service_name="airflow",
+    agent_host_name="localhost",
+    agent_port=6831,
+)
+
+trace.get_tracer_provider().add_span_processor(
+    BatchExportSpanProcessor(jaeger_exporter)
+)
+
+tracer = trace.get_tracer(__name__)
 
 
-class Graph:
-    def __init__(self, dag):
-        self.dag = dag
-        self.graph = collections.defaultdict(list)
-        self.tasks = {}
-        for task in dag['dag']['tasks']:
-            self.tasks[task['task_id']] = task
-            self.graph[task['task_id']].extend(task['_downstream_task_ids'])
-        self.graph = dict(self.graph)
-
-    def bfs(self):
-        # get all nodes that don't have parents
-        q = queue.Queue()
-        print(self.graph)
-        for n in self.graph:
-            for n2, edges in self.graph.items():
-                if n in edges:
-                    break
-            else:
-                q.put(n)
-
+def dt_to_ns_epoch(dt):
+    return int(dt.timestamp() * 1000000000)
 
 
 def main(cli=None):
+
     # it may be that the dag is updated in the db to a version that no longer reflects historic runs...
     dag = serialized_dag.SerializedDagModel.get(dag_id=cli.dag_id)
     g = Graph(dag.data)
@@ -44,14 +38,23 @@ def main(cli=None):
     dagrun = dag.dag.get_dagrun(execution_date=cli.execution_date)
     tis = dagrun.get_task_instances()
 
-    import ipdb; ipdb.set_trace();
+    root_span = tracer.start_span(
+        name=dag.dag.dag_id,
+        start_time=dt_to_ns_epoch(dagrun.start_date)
+    )
+    root_span.end(end_time=dt_to_ns_epoch(dagrun.end_date))
 
-    # construct the dag as a graph
+    for ti in tis:
+        ctx = trace.set_span_in_context(root_span)
 
-    # setup the tracer
-
-    # iterate the dag invocation creating a trace per span
-    print(cli)
+        span = tracer.start_span(
+            name=ti.task_id,
+            context=ctx,
+            start_time=dt_to_ns_epoch(ti.start_date),
+        )
+        if ti.state != 'success':
+            span.set_attribute('error', True)
+        span.end(end_time=dt_to_ns_epoch(ti.end_date))
 
 
 if __name__ == '__main__':
