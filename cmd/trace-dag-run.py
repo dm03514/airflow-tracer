@@ -18,7 +18,9 @@ jaeger_exporter = jaeger.JaegerSpanExporter(
 )
 
 trace.get_tracer_provider().add_span_processor(
-    BatchExportSpanProcessor(jaeger_exporter)
+    BatchExportSpanProcessor(
+        jaeger_exporter,
+    )
 )
 
 tracer = trace.get_tracer(__name__)
@@ -32,9 +34,6 @@ def main(cli=None):
 
     # it may be that the dag is updated in the db to a version that no longer reflects historic runs...
     dag = serialized_dag.SerializedDagModel.get(dag_id=cli.dag_id)
-    g = Graph(dag.data)
-    g.bfs()
-
     dagrun = dag.dag.get_dagrun(execution_date=cli.execution_date)
     tis = dagrun.get_task_instances()
 
@@ -52,6 +51,15 @@ def main(cli=None):
             context=ctx,
             start_time=dt_to_ns_epoch(ti.start_date),
         )
+        # span.set_attribute('airflow.pool', ti.pool)
+        # span.set_attribute('airflow.queue', ti.queue)
+        span.set_attribute('airflow.state', ti.state)
+        span.set_attribute('airflow.operation', ti.operator)
+        # span.set_attribute('airflow.max_tries', ti.max_tries)
+        if ti.job_id is not None:
+            span.set_attribute('airflow.job_id', ti.job_id)
+        # span.set_attribute('airflow.pool_slots', ti.pool_slots)
+        # span.set_attribute('airflow.priority_weight', ti.priority_weight)
         if ti.state != 'success':
             span.set_attribute('error', True)
         span.end(end_time=dt_to_ns_epoch(ti.end_date))
